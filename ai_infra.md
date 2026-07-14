@@ -2,6 +2,7 @@
 
 > 项目代号：**MegaPerfBench**。目标：为 Megatron-LM 性能回归检测 agent 构建地基数据集。
 > 模型纪律：**所有 LLM 调用一律使用 `claude-opus-4-8`**（Tier 1 走 Batch API 五折，其余走标准 API）。
+> **存储纪律：所有产出（数据、报告、脚本、日志、缓存）只写入 `/mnt/efs/tsfm/rui/GAA/ai_infra/`。严禁把任何内容推送到 GitHub 或任何外部服务——本计划文档本身是唯一的例外。**
 > 预算硬帽：**$6,000 API 成本**（中心估计 $3,000–4,800）。日历时间：2–3 周（含人工仲裁）。
 > 本文档自包含：执行者不需要读任何其他对话记录即可开工。
 
@@ -15,7 +16,7 @@
 2. **regression_pairs.jsonl** — ~250–400 个 `(引入 commit, 修复 commit, 表现条件, 量级)` 回归对，分 A/B/C 证据级
 3. **冻结的评测协议** — train/dev/test 切分 + 防泄漏规则 + 指标定义 + baseline 运行结果
 
-所有产出进入新建**私有**仓库 `huthvincent/MegaPerfBench`（目录规范见 §8——这是本计划最重要的一节，后续所有 Phase 都消费这些文件）。
+所有产出落在共享盘目录 **`/mnt/efs/tsfm/rui/GAA/ai_infra/`**，**不上 GitHub**（目录规范见 §8——这是本计划最重要的一节，后续所有 Phase 都消费这些文件）。
 
 **为什么全量而不是关键词过滤**：pilot（2026-07-13，48 commit 分层人审级标注）实测关键词过滤 precision ≈60% 但 recall 未知；大量性能 bug 的 commit message 是中性的。全量处理买到：无偏分类学、可测量的过滤 recall、全量良性池（hard negatives + 真实基率）、更完整的回归对。
 
@@ -209,12 +210,12 @@ Prompt 要点：给出 §2 的定义 + pilot gold cards 中的 8–10 个 few-sh
 
 ## 8. Output 规范 ★（后续所有 Phase 的消费接口）
 
-### 8.1 仓库与目录
+### 8.1 存储位置与目录
 
-新建**私有**仓库 `huthvincent/MegaPerfBench`（数据从第一天按可公开标准构建：全部 provenance 可追溯、上游 license 记录在 DATASHEET；发布与否后议）。目录：
+**根目录：`/mnt/efs/tsfm/rui/GAA/ai_infra/`。所有数据、报告、脚本、prompt、缓存只写这里，严禁推送 GitHub 或任何外部服务。** 数据仍从第一天按可公开标准构建（全部 provenance 可追溯、上游 license 记录在 DATASHEET），但发布与否后议、且发布动作不属于本计划范围。目录：
 
 ```
-MegaPerfBench/
+/mnt/efs/tsfm/rui/GAA/ai_infra/
 ├── README.md                  # 数据集总览 + 快速上手（如何加载、字段含义索引）
 ├── DATASHEET.md               # datasheet for datasets：来源、license、构建方法、已知偏差
 ├── schemas/                   # 所有 JSON Schema，文件名带版本（card.v1.schema.json 等）
@@ -224,7 +225,7 @@ MegaPerfBench/
 │   ├── issues/{repo}.jsonl    # issue 深读记录
 │   ├── reverts.jsonl
 │   ├── golden_values/megatron_churn.jsonl
-│   └── gh_cache/              # GitHub API 响应缓存（gitignore，不提交）
+│   └── gh_cache/              # GitHub API 响应缓存（只读缓存，体积大可定期清）
 ├── screening/
 │   ├── tier0_routing.jsonl
 │   └── tier1_screen.jsonl
@@ -245,7 +246,11 @@ MegaPerfBench/
 └── scripts/                   # 管线代码（Phase 0 执行时写入）
 ```
 
-**规则**：数据文件全部 JSONL（一行一记录，UTF-8）；总量预计 <50MB，plain git 即可；`raw/gh_cache/` 进 .gitignore；每次大批量写入单独 commit，message 注明 stage 和数量。
+**规则**：
+- 数据文件全部 JSONL（一行一记录，UTF-8）；核心产出总量预计 <50MB
+- 版本化用**本地 git**（在根目录 `git init`，**不配置任何 remote**——`git remote add` 属于违规操作）；每次大批量写入单独 commit，message 注明 stage 和数量；`raw/gh_cache/` 进 .gitignore
+- 如不用本地 git，则退化方案为：所有覆盖式修改前先把旧文件复制到 `archive/{日期}/`，保证可回溯
+- 再强调一次：**这个目录下的任何内容都不推 GitHub、不上传任何外部服务**
 
 ### 8.2 通用字段：ID 与 provenance
 
@@ -364,7 +369,7 @@ MegaPerfBench/
 | 子管线 S2–S5 | 各自 raw 文件 + 回填完成 |
 | 负样本 | 三层负样本齐 + 分布报告 |
 | 人工仲裁 | 全部 A/B pairs 过目 + 10% 审计 + kappa 报告 |
-| 冻结 | `splits/FROZEN` 落盘；README/DATASHEET 完稿；v0.1 tag |
+| 冻结 | `splits/FROZEN` 落盘；README/DATASHEET 完稿；本地 git tag `v0.1`（或写 `VERSION` 文件） |
 
 ---
 
@@ -382,7 +387,7 @@ MegaPerfBench/
 | 重跑/修 prompt 余量 | — | — | ~$500 |
 | **合计** | | | **$3,300–5,200（帽 $6,000）** |
 
-时间线：W1 = 全量 clone + Tier 0 + Tier 1 校准与全量 + S3/S4 子管线；W2 = Tier 2 + S2 + Tier 3；W3 = 负样本 + 人工仲裁 + 协议冻结 + v0.1 tag。Rui 的人工投入集中在 W2 末–W3（3–5 天）。
+时间线：W1 = 全量 clone + Tier 0 + Tier 1 校准与全量 + S3/S4 子管线；W2 = Tier 2 + S2 + Tier 3；W3 = 负样本 + 人工仲裁 + 协议冻结 + 本地 v0.1 版本标记。Rui 的人工投入集中在 W2 末–W3（3–5 天）。
 
 ---
 
@@ -394,14 +399,14 @@ MegaPerfBench/
 | SZZ 标签噪声（perf fix 远离引入点） | 3 票制 + regression/latent 显式二分 + 全部 pairs 人工过目 |
 | 模型记忆污染评测 | memorization 检查（§8.7.3）+ 呈现时点隔离 |
 | 环境混杂（container 升级/集群搬迁） | golden 流单独标 `env-confounded`，不进 pairs |
-| 上游 license/issue 文本合规 | DATASHEET 记录来源与 license（四仓库均 Apache/BSD 系）；仓库先 private |
+| 上游 license/issue 文本合规 | DATASHEET 记录来源与 license（四仓库均 Apache/BSD 系）；数据只存 EFS 不外传，发布另行决策 |
 | 成本超支 | $4,500 预警线 + $6,000 硬帽；每 stage 实测入 report |
 
 ---
 
 ## 11. Phase 0 之后的路线图
 
-> 每个 Phase 的输入都是上一 Phase 落盘在 MegaPerfBench 里的文件——这是 §8 输出规范存在的意义。
+> 每个 Phase 的输入都是上一 Phase 落盘在 `/mnt/efs/tsfm/rui/GAA/ai_infra/` 里的文件——这是 §8 输出规范存在的意义。
 
 **Phase 1 — 分类学归纳与检测配方分派（~1 周）**
 输入 `cases/cards_final.jsonl` → 自底向上聚类归纳两层分类学（目标 30–50 叶子类），每叶挂：真实案例列表、检测要点、`static_detectability` 分布 → 据此把每叶分派到三种检测配方之一：(a) 机械可判 → 静态规则生成；(b) 语义类 → 检索增强 review；(c) 环境相关 → 风险路由+定向 benchmark。回填 `taxonomy_label` 到 cards。产出：`taxonomy/taxonomy.yaml` v1。
